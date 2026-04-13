@@ -104,6 +104,19 @@
       background: #2d3748;
       transform: translateY(-1px);
     }
+
+    .btn[disabled] {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .retry-hint {
+      margin-top: -18px;
+      margin-bottom: 18px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
     
     .help-text {
       margin-top: 24px;
@@ -138,7 +151,11 @@
       <div class="error-code">错误代码: <%= code %></div>
     <% } %>
     
-    <% if (typeof backUrl !== 'undefined' && backUrl) { %>
+    <% const isPendingConfirm = (typeof code !== 'undefined' && code === 'PAYMENT_PENDING_CONFIRM'); %>
+    <% if (isPendingConfirm && typeof backUrl !== 'undefined' && backUrl) { %>
+      <button id="retryCheckBtn" type="button" class="btn btn-back">再次检查</button>
+      <p class="retry-hint">支付结果可能延迟回传，点击后将等待 1 秒再次检查</p>
+    <% } else if (typeof backUrl !== 'undefined' && backUrl) { %>
       <a href="<%= backUrl %>" class="btn btn-back">返回重试</a>
     <% } else { %>
       <a href="javascript:history.back()" class="btn btn-back">返回上一页</a>
@@ -148,5 +165,34 @@
       如果问题持续出现，请联系客服获取帮助
     </p>
   </div>
+
+  <% if (typeof code !== 'undefined' && code === 'PAYMENT_PENDING_CONFIRM' && typeof backUrl !== 'undefined' && backUrl) { %>
+    <script>
+      (function () {
+        var retryBtn = document.getElementById('retryCheckBtn');
+        if (!retryBtn) {
+          return;
+        }
+
+        var locked = false;
+        var baseUrl = '<%= backUrl %>';
+
+        retryBtn.addEventListener('click', function () {
+          if (locked) {
+            return;
+          }
+
+          locked = true;
+          retryBtn.disabled = true;
+          retryBtn.textContent = '检查中...';
+
+          setTimeout(function () {
+            var sep = baseUrl.indexOf('?') >= 0 ? '&' : '?';
+            window.location.href = baseUrl + sep + '_retry_ts=' + Date.now();
+          }, 1000);
+        });
+      })();
+    </script>
+  <% } %>
 </body>
 </html>

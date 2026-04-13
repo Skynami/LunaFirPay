@@ -2798,6 +2798,37 @@ router.all('/return/:trade_no', async (req, res) => {
     }
 
     const order = orders[0];
+    let effectiveOrder = order;
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const loadLatestOrderById = async (orderId) => {
+      const [rows] = await db.query('SELECT * FROM orders WHERE id = ? LIMIT 1', [orderId]);
+      return rows.length > 0 ? rows[0] : null;
+    };
+    const confirmPaidWithDelay = async (reason) => {
+      let latest = await loadLatestOrderById(order.id);
+      if (latest && Number(latest.status) === 1) {
+        console.warn('[ReturnFallback] 即时查询确认订单已支付，放行跳转', {
+          tradeNo: order.trade_no,
+          orderId: order.id,
+          reason
+        });
+        return latest;
+      }
+
+      await wait(1000);
+      latest = await loadLatestOrderById(order.id);
+      if (latest && Number(latest.status) === 1) {
+        console.warn('[ReturnFallback] 延迟1秒查询确认订单已支付，放行跳转', {
+          tradeNo: order.trade_no,
+          orderId: order.id,
+          reason
+        });
+        return latest;
+      }
+
+      return null;
+    };
 
     // 获取通道配置
     if (order.channel_id) {
@@ -2820,8 +2851,23 @@ router.all('/return/:trade_no', async (req, res) => {
             pluginConfig = channelConfig.params || {};
           } catch (e) {}
 
-          const returnResult = await plugin.returnCallback(pluginConfig, params, order);
-          
+          let returnResult;
+          try {
+            returnResult = await plugin.returnCallback(pluginConfig, params, order);
+          } catch (pluginError) {
+            const paidOrder = await confirmPaidWithDelay(`RETURN_CALLBACK_ERROR:${pluginError.message || 'unknown'}`);
+            if (paidOrder) {
+              effectiveOrder = paidOrder;
+              returnResult = { success: false, msg: pluginError.message || 'return callback exception' };
+            } else {
+              return res.render('error', {
+                message: '还没收到支付成功数据，请稍后重试',
+                code: 'PAYMENT_PENDING_CONFIRM',
+                backUrl: req.originalUrl
+              });
+            }
+          }
+
           if (returnResult.success) {
             // 更新订单（如果还未支付）
             if (order.status === 0) {
@@ -2831,36 +2877,48 @@ router.all('/return/:trade_no', async (req, res) => {
               );
               // 发送下游通知
               const [updatedOrders] = await db.query('SELECT * FROM orders WHERE id = ?', [order.id]);
-              await sendDownstreamNotify(updatedOrders[0]);
+              if (updatedOrders.length > 0) {
+                effectiveOrder = updatedOrders[0];
+                await sendDownstreamNotify(effectiveOrder);
+              }
             }
           } else if (returnResult.msg) {
-            return res.render('error', { message: returnResult.msg, code: 'VERIFY_FAILED', backUrl: order.return_url });
+            const paidOrder = await confirmPaidWithDelay(`VERIFY_FAILED:${returnResult.msg}`);
+            if (paidOrder) {
+              effectiveOrder = paidOrder;
+            } else {
+              return res.render('error', {
+                message: '还没收到支付成功数据，请稍后重试',
+                code: 'PAYMENT_PENDING_CONFIRM',
+                backUrl: req.originalUrl
+              });
+            }
           }
         }
       }
     }
 
     // 跳转到商户回调地址或成功页面
-    if (order.return_url) {
+    if (effectiveOrder.return_url) {
       // 构建带参数的回调URL
       const [merchants] = await db.query(
         'SELECT api_key, pid FROM merchants WHERE user_id = ?',
-        [order.merchant_id]
+        [effectiveOrder.merchant_id]
       );
       
       if (merchants.length > 0) {
-        const callbackParams = buildCallbackParams(order, merchants[0].api_key, merchants[0].pid);
-        const returnUrl = new URL(order.return_url);
+        const callbackParams = buildCallbackParams(effectiveOrder, merchants[0].api_key, merchants[0].pid);
+        const returnUrl = new URL(effectiveOrder.return_url);
         Object.entries(callbackParams).forEach(([k, v]) => {
           returnUrl.searchParams.set(k, v);
         });
         return res.redirect(returnUrl.toString());
       }
-      return res.redirect(order.return_url);
+      return res.redirect(effectiveOrder.return_url);
     }
 
     // 无回调地址，显示成功页面
-    res.render('success', { order });
+    res.render('success', { order: effectiveOrder });
 
   } catch (error) {
     console.error('Return Error:', error);

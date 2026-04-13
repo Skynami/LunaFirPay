@@ -302,7 +302,7 @@ node callback-proxy.js
 
 加入 Telegram 群组讨论交流：
 
-[![Telegram Group](https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram)](https://t.me/lunafirserver)
+[![Telegram Group](https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram)](https://t.me/gaoya_pay)
 
 ## 🤝 贡献
 
